@@ -3,6 +3,21 @@
 
 For more information on the Yelp Dataset Challenge please visit http://yelp.com/dataset_challenge
 
+-------------------------------------------------------------------------------------------------
+Original source provided by Yelp and available from
+https://github.com/Yelp/dataset-examples/blob/master/json_to_csv_converter.py
+Updated to:
+- Decode json objects embedded as strings
+- Display processed metrics
+- Added verbose, regex and skip lines arguments
+
+Example usage:
+- json_to_csv_converter yelp_dataset/yelp_academic_dataset_review.json
+- json_to_csv_converter yelp_dataset/yelp_academic_dataset_tip.json
+- json_to_csv_converter yelp_dataset/yelp_academic_dataset_user.json
+- json_to_csv_converter yelp_dataset/yelp_academic_dataset_checkin.json
+- json_to_csv_converter yelp_photos/photos.json
+- json_to_csv_converter -r yelp_dataset/yelp_academic_dataset_business.json
 """
 import argparse
 import collections
@@ -16,7 +31,7 @@ except AttributeError:
     collectionsAbc = collections
 
 
-def read_and_write_file(json_file_path, csv_file_path, column_names, skip=0):
+def read_and_write_file(json_file_path, csv_file_path, column_names, skip_l=0, regex_lc=True):
     """Read in the json dataset file and write it out to a csv file, given the column names."""
     with open(csv_file_path, 'w', encoding='utf8') as fout:
         csv_file = csv.writer(fout)
@@ -24,153 +39,76 @@ def read_and_write_file(json_file_path, csv_file_path, column_names, skip=0):
         with open(json_file_path) as fin:
             count = 1
             for line in fin:
-                if skip <= 0:
-                    line_contents = get_line_contents(line)
+                if skip_l <= 0:
+                    line_contents = get_line_contents(line, regex_contents=regex_lc)
                     csv_file.writerow(get_row(line_contents, column_names))
                     if count % 100 == 0:
                         print(f"Line: {count}", end="\r", flush=True)
                 else:
-                    skip -= 1
+                    skip_l -= 1
                 count += 1
-            print()
+            print(f"Processed {count} lines")
 
 
-def temp_replace(raw_line, temp_repl, gen_pattern, gen_repl, undo_repl):
-    """
-    Do temporary replacement of patterns which should not be changed
-    :param raw_line:
-    :param temp_repl: tuple/tuple list of temporary regex pattern and replacement
-    :param gen_pattern:
-    :param gen_repl:
-    :param undo_repl: tuple/tuple list of regex pattern and replacement to undo temporary
-    :return:
-    """
-    # do temp replacement
-    if isinstance(temp_repl, list):
-        temp_repl_list = temp_repl
-        undo_repl_list = undo_repl
-    else:
-        temp_repl_list = [temp_repl]
-        undo_repl_list = [undo_repl]
-    wip_line = raw_line
-    for pattern, repl in temp_repl_list:
-        wip_line = re.sub(pattern, repl, wip_line)
-    # go general sub
-    wip_line = re.sub(gen_pattern, gen_repl, wip_line)
-    # undo temp replacement
-    for pattern, repl in undo_repl_list:
-        wip_line = re.sub(pattern, repl, wip_line)
-    return wip_line
+def process(content, res, regex_contents=True):
+    """ Process a dictionary of json key/value pairs """
+    for k, v in content:
+        if isinstance(v, collectionsAbc.MutableMapping):
+            res[k] = {}
+            process(v.items(), res[k], regex_contents=regex_contents)
+        elif isinstance(v, str):
+            if re.match(r"^\{.*[:].*\}$", v):
+                # looks like a string encodes json object
+                if regex_contents:
+                    # convert json entries like ['validated': False] to ["validated": "False"]
+                    v = re.sub(r"\'([\w]+)\':", lambda m: r'"' + m.group(1) + r'":', v)
+                    v = re.sub(r": (True|False|None)", lambda m: r':"' + m.group(1) + r'"', v)
+
+                    # convert json entries like ['dairy-free':] to ["dairy-free":]
+                    v = re.sub(r"\'(\w+)-(\w+)\':", lambda m: r'"' + m.group(1) + '-' + m.group(2) + r'":', v)
+
+                    # convert json entries like ["WiFi":"u'no'"] to ["WiFi":"no"]
+                    v = re.sub(r"\"u'(\w+)'\"", lambda m: '"' + m.group(1) + '"', v)
+
+                    # convert json entries like ["Alcohol":"'none'"] to ["Alcohol":"none"]
+                    v = re.sub(r"'(\w+)'", lambda m: m.group(1), v)
+
+                res[k] = get_line_contents(v, regex_contents=regex_contents)
+            else:
+                if regex_contents:
+                    # convert json entries like ["WiFi":"u'no'"] to ["WiFi":"no"]
+                    v = re.sub(r"u'(\w+)'", lambda m: m.group(1), v)
+                    v = re.sub(r"'(\w+)'", lambda m: m.group(1), v)
+                res[k] = v
+        else:
+            res[k] = v
 
 
-def get_line_contents(raw_line):
+def get_line_contents(raw_line, regex_contents=True):
     """ Standardise the json format in the string """
-    # convert json entries like ['validated': False] to ["validated": "False"]
-    # - handle case like ["text":"etc. \nJohn: True etc."]
-    wip_line = temp_replace(raw_line,
-                            (r"(\"text\":\"[\w\W]+)\\n(\w+): True",
-                                lambda m: m.group(1) + r"\n" + m.group(2) + ": #True#"),
-                            r": True([,}])", lambda m: ': "True"' + m.group(1),
-                            (r"(\"text\":\"[\w\W]+)\\n(\w+): #True#",
-                                lambda m: m.group(1) + r"\n" + m.group(2) + ": True"))
+    line_contents = json.loads(raw_line)
 
-    wip_line = re.sub(r": False([,}])", lambda m: ': "False"' + m.group(1), wip_line)
-    # - handle case like ["text":"My dad etc. etc. Roasted Red Pepper 'Htipiti': barrel-aged feta, etc."]
-    wip_line = temp_replace(wip_line,
-                            (r"(\"text\":\"[\w\W]+)'(\w+)':", lambda m: m.group(1) + "#'#" + m.group(2) + "#'#:"),
-                            r"'(\w+)':", lambda m: '"' + m.group(1) + '":',
-                            (r"(\"text\":\"[\w\W]+)#'#(\w+)#'#:", lambda m: m.group(1) + "'" + m.group(2) + "':"))
+    result = {}
+    process(line_contents.items(), result, regex_contents=regex_contents)
 
-    # convert json entries like ['dairy-free':] to ["dairy-free":]
-    # - handle case like ["text":"etc. 'double-pita': etc."]
-    wip_line = temp_replace(wip_line,
-                            (r"(\"text\":\"[\w\W]+)'(\w+)-(\w+)':",
-                                lambda m: m.group(1) + "#'#" + m.group(2) + '-' + m.group(3) + "#'#:"),
-                            r"'(\w+)-(\w+)':", lambda m: '"' + m.group(1) + '-' + m.group(2) + '":',
-                            (r"(\"text\":\"[\w\W]+)#'#(\w+)-(\w+)#'#:",
-                             lambda m: m.group(1) + "'" + m.group(2) + '-' + m.group(3) + "':"))
-
-    # convert json entries like ["{]/[}"] to [{]/[}], i.e. start end of json objects embedded as strings
-    # - handle case like ["text":"{{First off, etc.}} etc."]
-    # - handle case like ["text":"{Cà Phê Sa Đá ~ Vietnamese Ice Coffee with Condense Milk} etc."]
-    # - handle case like ["text":"{just etc."]
-    # - handle case like ["caption": "{.: clockwise .:} etc."]
-    # TODO - handle case like ["text":"I etc. respose :\"{sigh}..what did you want...{frown\/look\/awkwardness}\". etc."]
-    wip_line = temp_replace(wip_line,
-                            [(r"(\"text\":\")\{{2}([\w ,.\\]+)", lambda m: m.group(1) + "#{{#" + m.group(2)),
-                                (r"(\"text\":\")\{([\w\W]+)\}([\w\W]+)\"",
-                                    lambda m: m.group(1) + "#{#" + m.group(2) + r"#}#" + m.group(3) + r'"'),
-                                (r"(\"text\":\")\{([\w\W]+)\"", lambda m: m.group(1) + "#{#" + m.group(2) + r'"'),
-                                (r"(\"caption\":\s*\")\{([.: ]+[\w\W]+[.: ]+)\}",
-                                    lambda m: m.group(1) + "#{#" + m.group(2) + "#}#")],
-                            r"\"{", "{",
-                            [(r"(\"text\":\")#\{{2}#([\w ,.\\]+)", lambda m: m.group(1) + "{{" + m.group(2)),
-                                (r"(\"text\":\")#\{#([\w\W]+)#\}#([\w\W]+)\"",
-                                    lambda m: m.group(1) + "{" + m.group(2) + r"}" + m.group(3) + r'"'),
-                                (r"(\"text\":\")#\{#([\w\W]+)\"", lambda m: m.group(1) + "{" + m.group(2) + r'"'),
-                                (r"(\"caption\":\s*\")#\{#([.: ]+[\w\W]+[.: ]+)#\}#",
-                                    lambda m: m.group(1) + "{" + m.group(2) + "}")])
-    # - handle case like ["name":"Small Flower {floral studio}"]
-    #                    ["text":"After etc. {Sorry but I forgot his name}"
-    #                    ["caption": "Linquine {Schreiners sausage, clams, shrimp, tomato, artichoke}"]
-    # - handle case like ["text":"I etc. :}"]
-    #                    ["text":"I etc. :+}"]
-    #                    ["text":"I etc. - }"]
-    wip_line = temp_replace(wip_line,
-                            [(r"\"(text|name|caption)(\":\s*\"[\w\W]+)\{([\w\W]+)\}\"",
-                                lambda m: r'"' + m.group(1) + m.group(2) + r"#{#" + m.group(3) + r"#}#" + r'"'),
-                                (r"(\"text\":\")([^{][\w\W]+)([: +-;^]+)\}\"",
-                                    lambda m: m.group(1) + m.group(2) + m.group(3) + r"#}#" r'"')],
-                            r"}\"([,}])", lambda m: '}' + m.group(1),
-                            [(r"\"(text|name|caption)(\":\s*\"[\w\W]+)#\{#([\w\W]+)#\}#\"",
-                                lambda m: r'"' + m.group(1) + m.group(2) + r"{" + m.group(3) + r'}"'),
-                                (r"(\"text\":\")([^{][\w\W]+)([: +-;^]+)#\}#\"",
-                                    lambda m: m.group(1) + m.group(2) + m.group(3) + r"}" r'"')])
-
-    # convert json entries like ["WiFi":"u'no'"] to ["WiFi":"no"]
-    wip_line = re.sub(r"\"u'(\w+)'\"", lambda m: '"' + m.group(1) + '"', wip_line)
-
-    # convert json entries like ["Alcohol":"'none'"] to ["Alcohol":"none"]
-    wip_line = re.sub(r"'(\w+)'", lambda m: m.group(1), wip_line)
-
-    # convert json entries like ["xyz": None] to ["xyz": "None"]
-    # - handle case like ["text":"5 Star Happy Hour. Bar None, one the etc."]
-    # - handle case like ["text":"Restaurant etc. \nNone, etc."]
-    #                    ["text":"etc. \nSeating: None, one the etc."]
-    # - handle case like ["text":"etc. ins! None, one the etc."]
-    wip_line = temp_replace(wip_line,
-                            [(r"(\"text\":\"[\w\W]+)([.?,]+)([\w ]*)None,",
-                                lambda m: m.group(1) + m.group(2) + m.group(3) + "None#,#"),
-                                (r"(\"text\":\"[\w\W]+)\\n([\w: ]*)None,",
-                                    lambda m: m.group(1) + r"\n" + m.group(2) + r"None#,#"),
-                                (r"(\"text\":\"[\w\W]+)! None,", lambda m: m.group(1) + r"! None#,#")],
-                            r"(?<!\")None([,}])", lambda m: '"None"' + m.group(1),
-                            [(r"(\"text\":\"[\w\W]+)([.?,]+)([\w ]*)None#,#",
-                                lambda m: m.group(1) + m.group(2) + m.group(3) + "None,"),
-                                (r"(\"text\":\"[\w\W]+)\\n([\w: ]*)None#,#",
-                                    lambda m: m.group(1) + r"\n" + m.group(2) + r"None,"),
-                                (r"(\"text\":\"[\w\W]+)! None#,#", lambda m: m.group(1) + r"! None,")])
-
-    line_contents = json.loads(wip_line)
-
-    return line_contents
+    return result
 
 
-def get_superset_of_column_names_from_file(json_file_path, skip=0):
+def get_superset_of_column_names_from_file(json_file_path, skip_l=0, regex_lc=True):
     """Read in the json dataset file and return the superset of column names."""
     column_names = set()
     with open(json_file_path) as fin:
         count = 1
         for line in fin:
-            if skip <= 0:
-                line_contents = get_line_contents(line)
+            if skip_l <= 0:
+                line_contents = get_line_contents(line, regex_contents=regex_lc)
                 column_names.update(
                         set(get_column_names(line_contents).keys())
                         )
                 if count % 100 == 0:
                     print(f"Scanning: {count}", end="\r", flush=True)
             else:
-                skip -= 1
+                skip_l -= 1
             count += 1
     return column_names
 
@@ -263,18 +201,21 @@ if __name__ == '__main__':
         help='The json file to convert.',
     )
     parser.add_argument(
-        '-v',
-        type=bool,
+        '-v', '--verbose',
         help='Verbose mode',
-        default=False,
-        required=False
+        action='store_true'
     )
     parser.add_argument(
-        '-s',
+        '-s', '--skip',
         type=int,
         help='Skip lines',
         default=0,
-        required=False
+        # required=False
+    )
+    parser.add_argument(
+        '-r', '--regex',
+        action='store_true',
+        help='Enable regex',
     )
 
     args = parser.parse_args()
@@ -284,11 +225,18 @@ if __name__ == '__main__':
 
     print(f"Converting '{json_file}' to '{csv_file}'")
 
-    print(f"Retrieving column names")
-    column_names = get_superset_of_column_names_from_file(json_file, 0) #2512200)
+    if args.verbose:
+        print(f"Arguments: {args}")
+
+    # args.skip = 5724400
+    if args.skip > 0:
+        print(f"Skipping {args.skip} lines")
+
+    print("Retrieving column names")
+    column_names = get_superset_of_column_names_from_file(json_file, skip_l=args.skip, regex_lc=args.regex)
     print(f"{len(column_names)} column names identified")
-    if args.v:
+    if args.verbose:
         print(f"{column_names}")
 
-    print(f"Processing json file")
-    read_and_write_file(json_file, csv_file, column_names)
+    print("Processing json file")
+    read_and_write_file(json_file, csv_file, column_names, skip_l=args.skip, regex_lc=args.regex)
