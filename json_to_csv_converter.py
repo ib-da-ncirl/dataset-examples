@@ -31,16 +31,16 @@ except AttributeError:
     collectionsAbc = collections
 
 
-def read_and_write_file(json_file_path, csv_file_path, column_names, skip_l=0, regex_lc=True):
+def read_and_write_file(json_file_path, csv_file_path, column_names, skip_l=0, regex_lc=True, crlf=False):
     """Read in the json dataset file and write it out to a csv file, given the column names."""
-    with open(csv_file_path, 'w', encoding='utf8') as fout:
-        csv_file = csv.writer(fout)
+    with open(csv_file_path, 'w', encoding='utf-8') as fout:
+        csv_file = csv.writer(fout, quoting=csv.QUOTE_MINIMAL)
         csv_file.writerow(list(column_names))
         with open(json_file_path) as fin:
             count = 1
             for line in fin:
                 if skip_l <= 0:
-                    line_contents = get_line_contents(line, regex_contents=regex_lc)
+                    line_contents = get_line_contents(line, regex_contents=regex_lc, crlf=crlf)
                     csv_file.writerow(get_row(line_contents, column_names))
                     if count % 100 == 0:
                         print(f"Line: {count}", end="\r", flush=True)
@@ -50,7 +50,7 @@ def read_and_write_file(json_file_path, csv_file_path, column_names, skip_l=0, r
             print(f"Processed {count} lines")
 
 
-def process(content, res, regex_contents=True):
+def process(content, res, regex_contents=True, crlf=False):
     """ Process a dictionary of json key/value pairs """
     for k, v in content:
         if isinstance(v, collectionsAbc.MutableMapping):
@@ -58,7 +58,7 @@ def process(content, res, regex_contents=True):
             process(v.items(), res[k], regex_contents=regex_contents)
         elif isinstance(v, str):
             if re.match(r"^\{.*[:].*\}$", v):
-                # looks like a string encodes json object
+                # looks like a string encoded json object
                 if regex_contents:
                     # convert json entries like ['validated': False] to ["validated": "False"]
                     v = re.sub(r"\'([\w]+)\':", lambda m: r'"' + m.group(1) + r'":', v)
@@ -73,8 +73,13 @@ def process(content, res, regex_contents=True):
                     # convert json entries like ["Alcohol":"'none'"] to ["Alcohol":"none"]
                     v = re.sub(r"'(\w+)'", lambda m: m.group(1), v)
 
-                res[k] = get_line_contents(v, regex_contents=regex_contents)
+                res[k] = get_line_contents(v, regex_contents=regex_contents, crlf=crlf)
             else:
+                # replace cr/lf by spaces as they cause problems for pandas when reading large csv files
+                if not crlf:
+                    v = re.sub(r"[\n]+", " ", v)
+                    v = re.sub(r"[\r]+", " ", v)
+
                 if regex_contents:
                     # convert json entries like ["WiFi":"u'no'"] to ["WiFi":"no"]
                     v = re.sub(r"u'(\w+)'", lambda m: m.group(1), v)
@@ -84,24 +89,24 @@ def process(content, res, regex_contents=True):
             res[k] = v
 
 
-def get_line_contents(raw_line, regex_contents=True):
+def get_line_contents(raw_line, regex_contents=True, crlf=False):
     """ Standardise the json format in the string """
     line_contents = json.loads(raw_line)
 
     result = {}
-    process(line_contents.items(), result, regex_contents=regex_contents)
+    process(line_contents.items(), result, regex_contents=regex_contents, crlf=crlf)
 
     return result
 
 
-def get_superset_of_column_names_from_file(json_file_path, skip_l=0, regex_lc=True):
+def get_superset_of_column_names_from_file(json_file_path, skip_l=0, regex_lc=True, crlf=False):
     """Read in the json dataset file and return the superset of column names."""
     column_names = set()
     with open(json_file_path) as fin:
         count = 1
         for line in fin:
             if skip_l <= 0:
-                line_contents = get_line_contents(line, regex_contents=regex_lc)
+                line_contents = get_line_contents(line, regex_contents=regex_lc, crlf=crlf)
                 column_names.update(
                         set(get_column_names(line_contents).keys())
                         )
@@ -217,13 +222,18 @@ if __name__ == '__main__':
         action='store_true',
         help='Enable regex',
     )
+    parser.add_argument(
+        '-c', '--crlf',
+        action='store_false',
+        help='Disable CR/LF replacement',
+    )
 
     args = parser.parse_args()
 
     json_file = args.json_file
-    csv_file = '{0}.csv'.format(json_file.split('.json')[0])
+    csv_filename = '{0}.csv'.format(json_file.split('.json')[0])
 
-    print(f"Converting '{json_file}' to '{csv_file}'")
+    print(f"Converting '{json_file}' to '{csv_filename}'")
 
     if args.verbose:
         print(f"Arguments: {args}")
@@ -233,10 +243,11 @@ if __name__ == '__main__':
         print(f"Skipping {args.skip} lines")
 
     print("Retrieving column names")
-    column_names = get_superset_of_column_names_from_file(json_file, skip_l=args.skip, regex_lc=args.regex)
+    column_names = get_superset_of_column_names_from_file(
+        json_file, skip_l=args.skip, regex_lc=args.regex, crlf=args.crlf)
     print(f"{len(column_names)} column names identified")
     if args.verbose:
         print(f"{column_names}")
 
     print("Processing json file")
-    read_and_write_file(json_file, csv_file, column_names, skip_l=args.skip, regex_lc=args.regex)
+    read_and_write_file(json_file, csv_filename, column_names, skip_l=args.skip, regex_lc=args.regex, crlf=args.crlf)
