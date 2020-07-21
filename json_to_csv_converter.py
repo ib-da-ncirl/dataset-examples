@@ -77,7 +77,7 @@ def process(content, res, regex_contents=True, time_count=False, crlf=False):
                 res[k] = get_line_contents(v, regex_contents=regex_contents, time_count=time_count, crlf=crlf)
             else:
                 # replace cr/lf by spaces as they cause problems for pandas when reading large csv files
-                if not crlf:
+                if crlf:
                     v = re.sub(r"[\n]+", " ", v)
                     v = re.sub(r"[\r]+", " ", v)
 
