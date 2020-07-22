@@ -23,8 +23,8 @@ Example usage:
 import argparse
 import collections
 import csv
-import simplejson as json
 import re
+import simplejson as json
 
 try:
     collectionsAbc = collections.abc
@@ -34,10 +34,10 @@ except AttributeError:
 
 def read_and_write_file(json_file_path, csv_file_path, column_names, skip_l=0, regex_lc=True, time_lc=False, crlf=False):
     """Read in the json dataset file and write it out to a csv file, given the column names."""
-    with open(csv_file_path, 'w', encoding='utf-8') as fout:
+    with open(csv_file_path, 'w', newline='', encoding='utf-8') as fout:
         csv_file = csv.writer(fout, quoting=csv.QUOTE_MINIMAL)
         csv_file.writerow(list(column_names))
-        with open(json_file_path) as fin:
+        with open(json_file_path, encoding='utf-8') as fin:
             count = 1
             for line in fin:
                 if skip_l <= 0:
@@ -110,7 +110,7 @@ def get_line_contents(raw_line, regex_contents=True, time_count=False, crlf=Fals
 def get_superset_of_column_names_from_file(json_file_path, skip_l=0, regex_lc=True, time_lc=False, crlf=False):
     """Read in the json dataset file and return the superset of column names."""
     column_names = set()
-    with open(json_file_path) as fin:
+    with open(json_file_path, encoding='utf-8') as fin:
         count = 1
         for line in fin:
             if skip_l <= 0:
@@ -157,7 +157,7 @@ def get_column_names(line_contents, parent_key=''):
 
 def get_nested_value(d, key):
     """Return a dictionary item given a dictionary `d` and a flattened key from `get_column_names`.
-    
+
     Example:
 
         d = {
@@ -169,7 +169,7 @@ def get_nested_value(d, key):
         key = 'a.b'
 
         will return: 2
-    
+
     """
     if d is None:
         return None
